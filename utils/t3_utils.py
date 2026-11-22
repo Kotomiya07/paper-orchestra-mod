@@ -11,7 +11,7 @@ import time
 from uuid import uuid4
 
 
-DEFAULT_T3_PROVIDER = "antigravity-008"
+DEFAULT_T3_PROVIDER = "antigravity"
 DEFAULT_T3_TIMEOUT_SECS = 900
 DEFAULT_T3_POLL_INTERVAL_SECS = 10.0
 _t3_call_lock = threading.Lock()

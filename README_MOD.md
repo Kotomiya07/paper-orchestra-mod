@@ -75,12 +75,12 @@ text and send only images and PDFs to T3:
 export LLM_BACKEND=openai
 export PAPER_ORCHESTRA_CPA=1
 export LLM_BACKEND_MULTIMODAL=t3
-export LLM_MULTIMODAL_MODEL=antigravity-008:gemini-4-neon
+export LLM_MULTIMODAL_MODEL=antigravity:gemini-4-neon
 ```
 
-T3 accepts `provider:model`, for example `antigravity-008:gemini-4-neon`
+T3 accepts `provider:model`, for example `antigravity:gemini-4-neon`
 or `acpRegistry_devin:gpt-6-2-sol-medium`. With no provider prefix, it
-uses `T3_DEFAULT_PROVIDER` (default `antigravity-008`).
+uses `T3_DEFAULT_PROVIDER` (default `antigravity`).
 Separate calls can take minutes and consume the provider's shared quota,
 including Google's quota when using Antigravity. Prefer CPA or `agy` for
 ordinary text. T3 calls are serialized within one Python process.

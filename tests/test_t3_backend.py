@@ -12,9 +12,9 @@ from utils import llm_backend_utils as llm
 
 
 @pytest.mark.parametrize("spec,default,expected", [
-    ("antigravity-008:gemini-4-neon", None, ("antigravity-008", "gemini-4-neon")),
+    ("antigravity:gemini-4-neon", None, ("antigravity", "gemini-4-neon")),
     ("acpRegistry_devin:gpt-6-2-sol-medium", None, ("acpRegistry_devin", "gpt-6-2-sol-medium")),
-    ("gemini-4-neon", None, ("antigravity-008", "gemini-4-neon")),
+    ("gemini-4-neon", None, ("antigravity", "gemini-4-neon")),
     ("gemini-4-neon", "other", ("other", "gemini-4-neon")),
 ])
 def test_model_spec(monkeypatch, spec, default, expected):
@@ -171,7 +171,7 @@ def test_t3_text_routing(monkeypatch):
         llm.call_llm_with_contents(["part"], "model", tools=[object()])
 
 
-@pytest.mark.parametrize("override", ["", "antigravity-008:gemini-4-neon"])
+@pytest.mark.parametrize("override", ["", "antigravity:gemini-4-neon"])
 def test_mixed_routing(monkeypatch, override):
     monkeypatch.setenv("LLM_BACKEND", "openai")
     monkeypatch.setenv("LLM_BACKEND_MULTIMODAL", "t3")
