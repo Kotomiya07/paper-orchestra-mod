@@ -31,6 +31,7 @@ from methods.agents.plotting_agent import PlottingAgent
 from utils.common_utils import (
     create_log_folder,
 )
+from utils.paper_banana_utils import require_gemini_plotting
 
 
 def write_single_paper(
@@ -45,6 +46,7 @@ def write_single_paper(
     research_cutoff: str = "2024-11",
     plotting_max_critic_rounds: int = 3,
 ):
+    require_gemini_plotting(image_model_name)
     latex_writeup_dir = osp.join(base_dir, "latex_writeup")
     pdf_file = osp.join(base_dir, "final_paper.pdf")
 

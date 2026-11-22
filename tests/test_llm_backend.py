@@ -174,3 +174,32 @@ def test_agents_use_selected_text_backend(monkeypatch, tmp_path, isolated_openai
     assert rate_sxs_lit_review("paper one", "paper two", model) == {"result": 3}
     assert generate.call_count == 4
     forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize("backend", ["openai", "agy", "t3"])
+def test_plotting_rejected_before_side_effects(monkeypatch, tmp_path, capsys, backend):
+    import sys
+
+    from methods.agents.plotting_agent import PlottingAgent
+    from methods.paper_writer_with_plotting import write_single_paper
+    from paper_writing_cli import main
+    from utils.paper_banana_utils import generate_figure_visuals
+
+    monkeypatch.setenv("LLM_BACKEND", backend)
+    output = tmp_path / "output"
+    reason = f"not supported with LLM_BACKEND={backend}"
+    monkeypatch.setattr(sys, "argv", ["paper_writing_cli.py", "--raw_materials_dir",
+                                     str(tmp_path / "missing"), "--latex_template_dir", str(tmp_path),
+                                     "--output_dir", str(output), "--use_plotting", "true"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 1
+    assert reason in capsys.readouterr().err
+    assert not output.exists()
+    with pytest.raises(NotImplementedError, match=reason):
+        write_single_paper(str(output), str(tmp_path))
+    assert not output.exists()
+    with pytest.raises(NotImplementedError, match=reason):
+        PlottingAgent().run(str(tmp_path / "missing.json"), str(tmp_path))
+    with pytest.raises(NotImplementedError, match=reason):
+        generate_figure_visuals("diagram", "test")

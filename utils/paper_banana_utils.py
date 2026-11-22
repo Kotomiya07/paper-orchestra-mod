@@ -27,6 +27,7 @@ from utils.gemini_utils import (
     call_gemini_with_contents,
     generate_image_with_gemini,
 )
+from utils.llm_backend_utils import resolve_text_backend
 
 cur_dir = os.path.dirname(os.path.realpath(__file__))
 PB_DIR = os.path.join(cur_dir, "../../PaperBanana")
@@ -643,6 +644,16 @@ def critique_and_revise_figure(
     return revised_description, critic_suggestions
 
 
+def require_gemini_plotting(image_model_name: str) -> None:
+    backend = resolve_text_backend(image_model_name)
+    if backend != "gemini":
+        raise NotImplementedError(
+            f"Plotting (--use_plotting true) is not supported with LLM_BACKEND={backend} "
+            "because diagram image generation requires Gemini (gemini-3-pro-image-preview). "
+            "Run with --use_plotting false or switch to the Gemini backend."
+        )
+
+
 def generate_figure_visuals(
     task_name: str,
     figure_description: str,
@@ -668,6 +679,7 @@ def generate_figure_visuals(
         base64_img = execute_plot_code_worker(code_text)
         return base64_img
     else:
+        require_gemini_plotting(image_model_name)
         # Prompt for diagram image generation
         prompt_text = f"Render an image based on the following detailed description: {figure_description}\n Note that do not include figure titles in the image. Diagram: "
 

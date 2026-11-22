@@ -89,6 +89,15 @@ def main():
 
     args = parser.parse_args()
 
+    if args.use_plotting:
+        from utils.paper_banana_utils import require_gemini_plotting
+
+        try:
+            require_gemini_plotting(args.image_model_name)
+        except NotImplementedError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+
     if args.research_cutoff is None:
         args.research_cutoff = datetime.now().strftime("%Y-%m")
 

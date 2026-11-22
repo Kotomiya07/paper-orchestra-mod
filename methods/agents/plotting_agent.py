@@ -25,6 +25,7 @@ from utils.paper_banana_utils import (
     generate_figure_visuals,
     critique_and_revise_figure,
     generate_figure_caption,
+    require_gemini_plotting,
 )
 
 
@@ -218,6 +219,7 @@ class PlottingAgent:
         raw_materials_dir: str,
         output_filepath: str = None,
     ):
+        require_gemini_plotting(self.image_model_name)
         with open(outline_json_path, "r", encoding="utf-8") as f:
             outline_data = json.load(f)
 
