@@ -30,7 +30,7 @@ YOU MUST ONLY CITE THE GIVEN 'collected_papers', DO NOT cite new papers other th
 
 CITATION REQUIREMENTS:
 - You have access to the abstract of {paper_count} collected papers.
-- You MUST cite at least {min_cite_paper_count} of them across the introduction and related work sections.
+- Cite ONLY papers from 'collected_papers' that are genuinely relevant and actually used to support your arguments; do NOT pad citations or cite weakly related papers.
 - Introduction: Cite key statistics, foundational models (CLIP, etc.), and broad problem statements.
 - Related Work: Do deep comparative citations. Group distinct works (e.g., "Several methods [A, B, C]...").
 - Ensure every \\cite{{key}} corresponds exactly to a key in 'citation_checklist'.

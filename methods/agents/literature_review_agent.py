@@ -26,8 +26,8 @@ from methods.prompts.literature_review_agent import (
     literature_review_agent_writter_prompt,
 )
 from utils.gemini_utils import call_gemini_with_contents, parse_gemini_latex_results
-from utils.llm_backend_utils import call_llm_with_contents
-from utils.scholar_utils import s2_title_search
+from utils.llm_backend_utils import call_llm_with_contents, resolve_text_backend
+from utils.scholar_utils import enrich_paper_metadata, is_date_valid, openalex_search, s2_search
 
 
 class CandidatePaper(BaseModel):
@@ -85,7 +85,7 @@ class HybridLiteratureAgent:
             "conference_guidelines.md": conference_guidelines_path,
         }
         self.context_files = self._load_context_files()
-        self.google_search_tool = types.Tool(google_search=types.GoogleSearch())
+        self.google_search_tool: types.Tool | None = None
 
         self.registry_lock = threading.Lock()
         self.print_lock = threading.Lock()
@@ -173,13 +173,15 @@ class HybridLiteratureAgent:
         if not active_tasks:
             return
 
-        self._safe_print(f"   🔎 Phase 1a: Google Candidates Discovery (MaxPool=10)...")
+        use_api_search = resolve_text_backend(self.model_name) != "gemini"
+        search_label = "API Candidates Discovery (S2 + OpenAlex)" if use_api_search else "Google Candidates Discovery"
+        self._safe_print(f"   Phase 1a: {search_label}...")
         all_candidates_with_tasks = []
 
-        with ThreadPoolExecutor(max_workers=10) as executor:  # Fast for Google Search!
+        with ThreadPoolExecutor(max_workers=min(self.max_workers, 2 if use_api_search else 10)) as executor:
             future_to_task = {
                 executor.submit(
-                    self._process_search_task_google, task, outline, cutoff_date
+                    self._process_search_task, task, outline, cutoff_date
                 ): task
                 for task in active_tasks
             }
@@ -194,11 +196,11 @@ class HybridLiteratureAgent:
                             )
                 except Exception as exc:
                     self._safe_print(
-                        f"      ❌ Google Search failed for '{task['focus'][:20]}...': {exc}"
+                        f"      Literature search failed ({type(exc).__name__})."
                     )
 
         self._safe_print(
-            f"   📊 Phase 1b: Semantic Scholar Enrichment (Rate-limited, sequential)..."
+            "   Phase 1b: Paper Metadata Enrichment (S2 -> OpenAlex -> Crossref)..."
         )
         import time
 
@@ -303,7 +305,7 @@ class HybridLiteratureAgent:
 
         return outline
 
-    def _process_search_task_google(self, task, outline, cutoff_date) -> list:
+    def _process_search_task(self, task, outline, cutoff_date) -> list:
         if task.get("search_type") == "targeted":
             self._safe_print(
                 f"   🎯 Targeted Search [{task['section']}]: '{task['focus']}'"
@@ -313,22 +315,23 @@ class HybridLiteratureAgent:
                 f"   🔎 Exploration [{task['section']}]: '{task['focus']}'"
             )
 
-        retry_count = 0
-        while retry_count < 3:
+        if resolve_text_backend(self.model_name) != "gemini":
+            return self._discover_candidates(task, outline, cutoff_date)
+        for _ in range(3):
             try:
                 candidates = self._discover_candidates(task, outline, cutoff_date)
                 if candidates:
                     return candidates
-                retry_count += 1
-            except Exception as e:
-                retry_count += 1
+            except Exception as exc:
+                self._safe_print(f"      Google search failed ({type(exc).__name__}); retrying.")
         return []
 
     def _enrich_and_register_paper(self, cand, task, registry, cutoff_date):
-        cand_title = getattr(cand, "title", None) or cand.get("title")
-        cand_year = getattr(cand, "year", None) or cand.get("year")
-        cand_reason = getattr(cand, "reason", None) or cand.get("reason", "")
-
+        if isinstance(cand, CandidatePaper):
+            cand = cand.model_dump()
+        cand_title = cand.get("title")
+        if not isinstance(cand_title, str) or not cand_title.strip():
+            return
         norm_title = self._normalize_title(cand_title)
 
         with self.registry_lock:
@@ -336,95 +339,96 @@ class HybridLiteratureAgent:
                 return
 
         try:
-            s2_data = s2_title_search(cand_title, cand_year, cutoff_date)
+            cand_year = self._paper_year(cand.get("year"))
+            metadata = enrich_paper_metadata(cand_title, cand_year, cutoff_date)
+            if not metadata or not self._is_paper_allowed(metadata, cutoff_date):
+                return
+            abstract = metadata.get("abstract")
+            if not isinstance(abstract, str) or not abstract.strip():
+                return
+            year = self._paper_year(metadata.get("year")) or cand_year
+            if not year:
+                self._safe_print("      Skipped an enriched paper without a valid publication year.")
+                return
+            authors = [
+                name for entry in metadata.get("authors") or []
+                if (name := entry.get("name")) and name.strip()
+            ]
+            journal = metadata.get("journal") or {}
+            title = metadata["title"]
+            full_obj = PaperData(
+                citation_key=self._generate_key(authors, year, title),
+                title=title,
+                authors=authors,
+                venue=metadata.get("venue") or "",
+                year=year,
+                abstract=abstract[:1500] + "... [Truncated]" if len(abstract) > 1500 else abstract,
+                citation_count=metadata.get("citationCount") or 0,
+                found_in_section=task["section"],
+                reason=cand.get("reason") or "",
+                journal=journal.get("name"),
+                volume=journal.get("volume"),
+                pages=journal.get("pages"),
+                publication_date=metadata.get("publicationDate"),
+            )
+            source, abstract_source = metadata["_source"], metadata["_abstract_source"]
+            label = source if source == abstract_source else f"{source}, abstract: {abstract_source}"
+            final_norm_title = self._normalize_title(full_obj.title)
+            with self.registry_lock:
+                if final_norm_title not in registry:
+                    registry[final_norm_title] = full_obj
+                    self._safe_print(f"      -> Added enriched paper [{label}]: {full_obj.title}")
+        except Exception as exc:
+            self._safe_print(f"      Paper enrichment failed ({type(exc).__name__}).")
 
-            if s2_data:
-                if not self._is_paper_allowed(s2_data, cutoff_date):
-                    return
-
-                if not s2_data.get("abstract", ""):
-                    return
-
-                authors_list = [a["name"] for a in s2_data.get("authors", [])]
-                j_info = s2_data.get("journal") or {}
-
-                abstract_text = s2_data.get("abstract") or ""
-                if len(abstract_text) > 1500:
-                    abstract_text = abstract_text[:1500] + "... [Truncated]"
-
-                full_obj = PaperData(
-                    citation_key=self._generate_key(
-                        s2_data.get("authors", []),
-                        s2_data.get("year"),
-                        s2_data["title"],
-                    ),
-                    title=s2_data["title"],
-                    authors=authors_list,
-                    venue=s2_data.get("venue") or "arXiv",
-                    year=s2_data.get("year") or cand_year,
-                    abstract=abstract_text,
-                    citation_count=s2_data.get("citationCount") or 0,
-                    found_in_section=task["section"],
-                    reason=cand_reason,
-                    journal=j_info.get("name"),
-                    volume=j_info.get("volume"),
-                    pages=j_info.get("pages"),
-                    publication_date=s2_data.get("publicationDate"),
-                )
-
-                final_norm_title = self._normalize_title(full_obj.title)
-
-                with self.registry_lock:
-                    if final_norm_title not in registry:
-                        registry[final_norm_title] = full_obj
-                        self._safe_print(
-                            f"      -> 📚 Added enriched paper: {full_obj.title}"
-                        )
-        except Exception as e:
-            pass
-
-    def _is_paper_allowed(self, s2_data: Dict, cutoff_date_str: str) -> bool:
-        if not cutoff_date_str:
-            return True
-
-        c_parts = [int(x) for x in cutoff_date_str.split("-")]
-        c_y = c_parts[0]
-        c_m = c_parts[1] if len(c_parts) > 1 else 12
-        c_d = c_parts[2] if len(c_parts) > 2 else 1
-
-        p_y, p_m, p_d = None, None, None
-        if s2_data.get("publicationDate"):
+    @staticmethod
+    def _paper_year(year: object) -> int | None:
+        if isinstance(year, (str, int)):
             try:
-                p_parts = [int(x) for x in str(s2_data["publicationDate"]).split("-")]
-                p_y = p_parts[0]
-                p_m = p_parts[1] if len(p_parts) > 1 else None
-                p_d = p_parts[2] if len(p_parts) > 2 else None
-            except:
+                return int(year)
+            except ValueError:
                 pass
+        return None
 
-        if p_y is None and s2_data.get("year"):
-            p_y = int(s2_data["year"])
+    def _is_paper_allowed(self, metadata: Dict, cutoff_date: str | None) -> bool:
+        return is_date_valid(metadata.get("publicationDate"), metadata.get("year"), cutoff_date)
 
-        if p_y is None:
-            return True
-        if p_y > c_y:
-            return False
-        if p_y < c_y:
-            return True
-        if p_m is None:
-            return True
-        if p_m > c_m:
-            return False
-        if p_m < c_m:
-            return True
-        if p_d is None:
-            return True
-        if p_d > c_d:
-            return False
+    @staticmethod
+    def _extract_targeted_query(focus: str) -> str:
+        for value in re.findall(r'\(([^()]+)\)|"([^"]+)"|(?<!\w)\'([^\']+)\'(?!\w)', focus):
+            text = next(part for part in value if part).strip()
+            if text and not text.isdecimal():
+                return text
+        return focus.strip()
 
-        return True
+    def _discover_api_candidates(self, task: dict, cutoff_date: str) -> list[dict[str, object]]:
+        focus = task["focus"].strip()
+        if not focus:
+            return []
+        if task.get("search_type") == "targeted":
+            query = self._extract_targeted_query(focus)
+            match = enrich_paper_metadata(query, cutoff_date=cutoff_date)
+            if match:
+                return [{"title": match["title"], "year": match.get("year"),
+                         "reason": f"Targeted title match via {match['_source']}"}]
+            return (openalex_search(query, limit=1, cutoff_date=cutoff_date)
+                    or s2_search(query, limit=1, cutoff_date=cutoff_date))[:1]
+        candidates = [
+            *s2_search(focus, limit=8, cutoff_date=cutoff_date),
+            *openalex_search(focus, limit=8, cutoff_date=cutoff_date),
+        ]
+        unique = {}
+        for candidate in candidates:
+            title = candidate.get("title")
+            if isinstance(title, str):
+                unique.setdefault(self._normalize_title(title), candidate)
+        return list(unique.values())
 
-    def _discover_candidates(self, task, outline, cutoff_date) -> List[CandidatePaper]:
+    def _discover_candidates(self, task, outline, cutoff_date) -> list[dict[str, object]]:
+        if resolve_text_backend(self.model_name) != "gemini":
+            return self._discover_api_candidates(task, cutoff_date)
+        if self.google_search_tool is None:
+            self.google_search_tool = types.Tool(google_search=types.GoogleSearch())
         intro_plan = outline.get("intro_related_work_plan", {}).get(
             "introduction_strategy", {}
         )
@@ -492,7 +496,6 @@ class HybridLiteratureAgent:
 
         writer_system_prompt = literature_review_agent_writter_prompt.format(
             paper_count=len(papers),
-            min_cite_paper_count=int(len(papers) * 0.9),
             cutoff_date=cutoff_date,
         )
 
@@ -605,4 +608,4 @@ class HybridLiteratureAgent:
         return loaded
 
     def _normalize_title(self, title):
-        return re.sub(r"[^a-z0-9]", "", title.lower())
+        return "".join(char for char in title.casefold() if char.isalnum())
