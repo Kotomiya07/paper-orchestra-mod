@@ -1,9 +1,14 @@
 import json
 from unittest.mock import Mock
 
-import httpx2
 import pytest
 
+try:
+    import httpx2 as http_client_lib
+except ImportError:
+    import httpx as http_client_lib
+
+from utils import llm_backend_utils as llm
 from utils import openai_utils
 
 
@@ -60,7 +65,7 @@ def test_tunnel(monkeypatch, isolated_openai, proxy, expected):
     monkeypatch.setenv("PAPER_ORCHESTRA_CPA_TUNNEL", "1")
     monkeypatch.setenv("HTTPS_PROXY", proxy)
     factory = Mock()
-    monkeypatch.setattr(httpx2, "Client", factory)
+    monkeypatch.setattr(http_client_lib, "Client", factory)
     openai_utils.get_openai_client()
     factory.assert_called_once_with(proxy=expected)
     isolated_openai.assert_called_once_with(api_key="fake-env-value", http_client=factory.return_value)
@@ -97,3 +102,46 @@ def test_image_mime(tmp_path, extension, mime):
     path.write_bytes(b"test")
     part = openai_utils.get_openai_image_part_from_path(str(path))[0]
     assert part["image_url"]["url"].startswith(f"data:{mime};base64,")
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "preview/DeepSeek-V4.1-Flash-1017", "gemini-3.1-pro-preview"])
+def test_openai_override(monkeypatch, model):
+    monkeypatch.setenv("LLM_BACKEND", "openai")
+    backend = Mock()
+    monkeypatch.setattr(llm, "call_openai_models_with_content", backend)
+    llm.call_llm_with_contents(["first", "second"], model, system_instruction="system")
+    assert backend.call_args.kwargs["content"] == "first\n\nsecond"
+    assert backend.call_args.kwargs["model_name"] == model
+    assert backend.call_args.kwargs["system_prompt"] == "system"
+    assert backend.call_args.kwargs["result_parsing_func"] is openai_utils.parse_openai_json_results
+    with pytest.raises(NotImplementedError, match="tools"):
+        llm.call_llm_with_contents(["prompt"], model, tools=[object()])
+
+
+@pytest.mark.parametrize("model,expected", [("gpt-example", "openai"), ("o1", "openai"),
+                                           ("o3", "openai"), ("gemini", "gemini")])
+def test_legacy_and_invalid_backend(monkeypatch, model, expected):
+    monkeypatch.delenv("LLM_BACKEND", raising=False)
+    assert llm.resolve_text_backend(model) == expected
+    monkeypatch.setenv("LLM_BACKEND", "invalid")
+    with pytest.raises(ValueError, match="LLM_BACKEND"):
+        llm.resolve_text_backend(model)
+
+
+def test_gemini_contents(monkeypatch):
+    monkeypatch.setenv("LLM_BACKEND", "gemini")
+    backend = Mock()
+    monkeypatch.setattr(llm, "call_gemini_with_contents", backend)
+    llm.call_llm_with_contents(["a", "b"], "model", system_instruction="system")
+    assert [part.text for part in backend.call_args.kwargs["contents"]] == ["a", "b"]
+    assert backend.call_args.kwargs["generation_configs"]["system_instruction"] == "system"
+
+
+def test_empty_images_send_text(monkeypatch, isolated_openai):
+    monkeypatch.setenv("LLM_BACKEND", "openai")
+    monkeypatch.setenv("LLM_BACKEND_MULTIMODAL", "t3")
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-env-value")
+    create = isolated_openai.return_value.chat.completions.create
+    create.return_value.choices = [Mock(message=Mock(content="answer"))]
+    llm.call_llm_with_images("prompt", [], "model", return_json=False)
+    assert create.call_args.kwargs["messages"] == [{"role": "user", "content": "prompt"}]

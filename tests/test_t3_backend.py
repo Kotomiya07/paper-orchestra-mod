@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from utils import t3_utils
+from utils import llm_backend_utils as llm
 
 
 @pytest.mark.parametrize("spec,default,expected", [
@@ -156,3 +157,32 @@ def test_calls_are_serialized(monkeypatch, project):
             release.set()
         assert (one.result(), two.result()) == ("one", "two")
     assert order == [("start", "one"), ("show", "one"), ("start", "two"), ("show", "two")]
+
+
+def test_t3_text_routing(monkeypatch):
+    monkeypatch.setenv("LLM_BACKEND", "t3")
+    backend = Mock(return_value="answer")
+    monkeypatch.setattr(llm, "call_t3_with_contents", backend)
+    llm.call_llm_with_text_prompt("text", "model", return_json=False)
+    backend.assert_called_with(prompt_text="text", attachments=[], model_name="model")
+    llm.call_llm_with_contents(["part"], "model", return_json=False)
+    backend.assert_called_with(prompt_text="part", attachments=[], model_name="model")
+    with pytest.raises(NotImplementedError, match="tools"):
+        llm.call_llm_with_contents(["part"], "model", tools=[object()])
+
+
+@pytest.mark.parametrize("override", ["", "antigravity-008:gemini-4-neon"])
+def test_mixed_routing(monkeypatch, override):
+    monkeypatch.setenv("LLM_BACKEND", "openai")
+    monkeypatch.setenv("LLM_BACKEND_MULTIMODAL", "t3")
+    monkeypatch.setenv("LLM_MULTIMODAL_MODEL", override)
+    t3 = Mock(return_value="answer")
+    openai = Mock()
+    monkeypatch.setattr(llm, "call_t3_with_contents", t3)
+    monkeypatch.setattr(llm, "call_openai_models_with_text_prompt", openai)
+    llm.call_llm_with_text_prompt("plain", "writer", return_json=False)
+    openai.assert_called_once()
+    llm.call_llm_with_images("image", ["image.png"], "writer", return_json=False)
+    t3.assert_called_with(prompt_text="image", attachments=["image.png"], model_name=override or "writer")
+    llm.call_llm_with_pdf("paper.pdf", "pdf", "writer", return_json=False)
+    t3.assert_called_with(prompt_text="pdf", attachments=["paper.pdf"], model_name=override or "writer")

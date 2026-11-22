@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from utils import agy_utils
+from utils import llm_backend_utils as llm
 
 
 def test_agy_command(monkeypatch):
@@ -72,3 +73,21 @@ def test_limit_measured_in_bytes(monkeypatch):
     with pytest.raises(ValueError, match="bytes"):
         agy_utils.call_agy_with_text_prompt("\u3042" * 200_000, "model")
     run.assert_not_called()
+
+
+def test_agy_routing(monkeypatch):
+    monkeypatch.setenv("LLM_BACKEND", "agy")
+    monkeypatch.delenv("LLM_BACKEND_MULTIMODAL", raising=False)
+    backend = Mock(return_value='```json\n{"answer": 1}\n```')
+    monkeypatch.setattr(llm, "call_agy_with_text_prompt", backend)
+    assert llm.call_llm_with_text_prompt("hello", "model")["parsed_response"] == {"answer": 1}
+    llm.call_llm_with_contents(["a", "b"], "model", system_instruction="system")
+    assert backend.call_args.args == ("System Instructions:\nsystem\n\na\n\nb", "model")
+    llm.call_llm_with_images("empty", [], "model")
+    assert backend.call_args.args == ("empty", "model")
+    with pytest.raises(NotImplementedError):
+        llm.call_llm_with_images("hello", ["image.png"], "model")
+    with pytest.raises(NotImplementedError):
+        llm.call_llm_with_pdf("paper.pdf", "hello", "model")
+    with pytest.raises(NotImplementedError):
+        llm.call_llm_with_contents(["hello"], "model", tools=[object()])
