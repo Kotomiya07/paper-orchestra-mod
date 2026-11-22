@@ -106,6 +106,27 @@ def test_thread_errors(monkeypatch, project, status, match):
         t3_utils.call_t3_with_contents("prompt")
 
 
+@pytest.mark.parametrize("failure,match", [
+    ("exit", "exited with code 1"),
+    ("invalid_json", "did not return valid JSON"),
+    ("timeout", "timed out"),
+])
+def test_cli_failure_reports_stderr_tail(monkeypatch, project, failure, match):
+    tail = "\u00e9" * 480 + "check the provider!!"
+    stderr = "discard this prefix\n" + tail
+    if failure == "timeout":
+        run = Mock(side_effect=subprocess.TimeoutExpired([], 60, stderr=stderr.encode("utf-8")))
+    else:
+        run = Mock(return_value=subprocess.CompletedProcess(
+            [], int(failure == "exit"), "not JSON", stderr,
+        ))
+    monkeypatch.setattr(t3_utils.subprocess, "run", run)
+
+    with pytest.raises(RuntimeError, match=match) as exc:
+        t3_utils.call_t3_with_contents("prompt")
+    assert str(exc.value).endswith(f"stderr tail: {tail}")
+
+
 def test_timeout(monkeypatch, project):
     monkeypatch.setattr(t3_utils.subprocess, "run", Mock(side_effect=[
         result({"threadId": "id"}), result({"status": "running"}),

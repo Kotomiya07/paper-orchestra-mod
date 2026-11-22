@@ -14,6 +14,7 @@ from uuid import uuid4
 DEFAULT_T3_PROVIDER = "antigravity"
 DEFAULT_T3_TIMEOUT_SECS = 900
 DEFAULT_T3_POLL_INTERVAL_SECS = 10.0
+MAX_STDERR_TAIL_CHARS = 500
 _t3_call_lock = threading.Lock()
 
 
@@ -61,20 +62,34 @@ def _extract_thread_id(payload: object) -> str | None:
     return thread_id if isinstance(thread_id, str) and thread_id else None
 
 
+def _format_stderr_tail(stderr: str | bytes | None) -> str:
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    return (stderr or "")[-MAX_STDERR_TAIL_CHARS:]
+
+
 def _run_t3(command: list[str], timeout: float) -> object:
     try:
         proc = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
                               text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"T3 thread {command[2]} timed out.") from None
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"T3 thread {command[2]} timed out. stderr tail: {_format_stderr_tail(exc.stderr)}"
+        ) from None
     except OSError as exc:
         raise RuntimeError("Could not start the T3 CLI.") from exc
     if proc.returncode:
-        raise RuntimeError(f"T3 thread {command[2]} exited with code {proc.returncode}.")
+        raise RuntimeError(
+            f"T3 thread {command[2]} exited with code {proc.returncode}. "
+            f"stderr tail: {_format_stderr_tail(proc.stderr)}"
+        )
     try:
         return json.loads(proc.stdout)
     except ValueError:
-        raise RuntimeError(f"T3 thread {command[2]} did not return valid JSON.") from None
+        raise RuntimeError(
+            f"T3 thread {command[2]} did not return valid JSON. "
+            f"stderr tail: {_format_stderr_tail(proc.stderr)}"
+        ) from None
 
 
 def call_t3_with_contents(
