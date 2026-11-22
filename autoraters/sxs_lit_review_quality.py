@@ -29,49 +29,24 @@ def rate_sxs_lit_review(
     paper1_text: str, paper2_text: str, model_name: str = "gemini-3.1-pro-preview"
 ):
     max_retries = 5
-    cur_try = 0
-    succeed = False
-
     prompt = f"Paper 1:\n{paper1_text}\n\n---\n\nPaper 2:\n{paper2_text}\n\nTask: Compare the literature review quality of these two papers side by side."
 
-    while (not succeed) and cur_try < max_retries:
+    for cur_try in range(max_retries):
         try:
-            if "gemini" in model_name:
-                response_dict = call_llm_with_text_prompt(
-                    prompt=prompt,
-                    model_name=model_name,
-                    generation_configs={
-                        "system_instruction": sxs_lit_review_quality_system_prompt,
-                        "temperature": 0.0,
-                    },
-                )
-                succeed = True
-                return (
-                    response_dict.get("parsed_response", response_dict)
-                    if isinstance(response_dict, dict)
-                    else response_dict
-                )
-            elif "gpt" in model_name:
-                response_dict = call_llm_with_text_prompt(
-                    prompt=prompt,
-                    model_name=model_name,
-                    generation_configs={
-                        "system_instruction": sxs_lit_review_quality_system_prompt,
-                    },
-                )
-                succeed = True
-                return (
-                    response_dict.get("parsed_response", response_dict)
-                    if isinstance(response_dict, dict)
-                    else response_dict
-                )
-
+            response_dict = call_llm_with_text_prompt(
+                prompt=prompt,
+                model_name=model_name,
+                generation_configs={
+                    "system_instruction": sxs_lit_review_quality_system_prompt,
+                    "temperature": 0.0,
+                },
+            )
+            return response_dict["parsed_response"]
         except Exception as e:
             print(
                 f"Error processing SxS: {e}. Retrying [{cur_try + 1}/{max_retries}]...",
                 flush=True,
             )
-            cur_try += 1
 
     return {}
 

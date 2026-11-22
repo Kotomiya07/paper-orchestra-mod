@@ -145,3 +145,32 @@ def test_empty_images_send_text(monkeypatch, isolated_openai):
     create.return_value.choices = [Mock(message=Mock(content="answer"))]
     llm.call_llm_with_images("prompt", [], "model", return_json=False)
     assert create.call_args.kwargs["messages"] == [{"role": "user", "content": "prompt"}]
+
+
+@pytest.mark.parametrize("backend", ["openai", "agy"])
+def test_agents_use_selected_text_backend(monkeypatch, tmp_path, isolated_openai, backend):
+    from autoraters.agent_review import perform_review_agentreview
+    from autoraters.sxs_lit_review_quality import rate_sxs_lit_review
+    from methods.agents.outline_agent import OutlineAgent
+    from utils.content_parsing_utils import extract_paper_title_from_citation
+
+    monkeypatch.setenv("LLM_BACKEND", backend)
+    forbidden = Mock(side_effect=AssertionError("Gemini must not be used"))
+    monkeypatch.setattr("utils.gemini_utils.get_genai_client", forbidden)
+    answers = ['```json\n{"result": 1}\n```', "Paper title", '{"result": 2}', '{"result": 3}']
+    if backend == "openai":
+        monkeypatch.setenv("OPENAI_API_KEY", "fake-env-value")
+        generate = isolated_openai.return_value.chat.completions.create
+        generate.side_effect = [Mock(choices=[Mock(message=Mock(content=answer))]) for answer in answers]
+    else:
+        generate = Mock(side_effect=answers)
+        monkeypatch.setattr(llm, "call_agy_with_text_prompt", generate)
+    material = tmp_path / "test.md"
+    material.write_text("smoke narrative")
+    model = "custom-model"
+    assert OutlineAgent(model).run(*([str(material)] * 4)) == {"result": 1}
+    assert extract_paper_title_from_citation("citation", model) == "Paper title"
+    assert perform_review_agentreview("paper", model, num_review_ensemble=1) == {"result": 2}
+    assert rate_sxs_lit_review("paper one", "paper two", model) == {"result": 3}
+    assert generate.call_count == 4
+    forbidden.assert_not_called()

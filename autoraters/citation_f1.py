@@ -38,7 +38,6 @@ load_dotenv(dot_file)
 DATASET_DIR = os.path.join(os.path.dirname(__file__), "../datasets")
 
 S2_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
-print(f"Loaded S2 API Key for this project: {S2_API_KEY}")
 
 PRIORITY_PROMPT = """You are an expert academic reviewer. Read the following paper text and analyze its references.
 Your goal is to categorize the provided references into two priorities:
@@ -102,7 +101,7 @@ class ReferenceF1V1Evaluator:
 
         # Parallel extraction of titles from citation strings
         cleaned_titles = Parallel(n_jobs=10, backend="threading")(
-            delayed(extract_paper_title_from_citation)(ref)
+            delayed(extract_paper_title_from_citation)(ref, model_name=self.model_name)
             for ref in tqdm(cleaned_refs, desc="Extracting Titles from Text")
         )
 

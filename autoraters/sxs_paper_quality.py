@@ -23,9 +23,10 @@ from google.genai import types
 import pymupdf  # type: ignore
 
 from utils.pdf_utils import load_paper
-from utils.llm_backend_utils import get_llm_parser
+from utils.llm_backend_utils import get_llm_parser, resolve_multimodal_backend, resolve_multimodal_model_name
 from utils.gemini_utils import call_gemini_with_contents
 from utils.openai_utils import call_openai_models_with_content
+from utils.t3_utils import call_t3_with_contents
 from autoraters.prompts.sxs_quality_prompts import sxs_paper_quality_system_prompt
 
 # Global lock for file writing
@@ -55,15 +56,15 @@ def rate_sxs_paper_quality(
 
     prompt_text = "Task: Compare the overall scientific contribution, technical depth, formatting, presentation, and writing quality of these two papers side by side."
 
-    is_openai = (
-        "gpt" in model_name.lower()
-        or "o1" in model_name.lower()
-        or "o3" in model_name.lower()
-    )
+    backend = resolve_multimodal_backend(model_name)
+    model_name = resolve_multimodal_model_name(model_name)
+    parser = get_llm_parser(model_name, backend=backend)
+    if backend == "agy":
+        raise NotImplementedError("agy does not support PDF attachments.")
 
     while (not succeed) and cur_try < max_retries:
         try:
-            if is_openai:
+            if backend == "openai":
                 # Setup OpenAI content payload
                 paper1_text = load_paper(paper1_path, min_size=100)
                 paper2_text = load_paper(paper2_path, min_size=100)
@@ -100,10 +101,21 @@ def rate_sxs_paper_quality(
                 response_dict = call_openai_models_with_content(
                     content=content,
                     model_name=model_name,
-                    result_parsing_func=get_llm_parser(model_name, return_json=True),
+                    result_parsing_func=parser,
                     check_parsed_response_not_none=True,
                     system_prompt=sxs_paper_quality_system_prompt,
                 )
+            elif backend == "t3":
+                raw = call_t3_with_contents(
+                    prompt_text=f"{sxs_paper_quality_system_prompt}\n\n"
+                                f"Compare the attached PDFs in the listed order.\n{prompt_text}",
+                    attachments=[paper1_path, paper2_path],
+                    model_name=model_name,
+                )
+                parsed = parser(raw)
+                if parsed is None:
+                    raise ValueError("Could not parse the T3 comparison.")
+                return parsed
             else:
                 # Setup Gemini
                 with open(paper1_path, "rb") as f1, open(paper2_path, "rb") as f2:
@@ -121,7 +133,7 @@ def rate_sxs_paper_quality(
                 response_dict = call_gemini_with_contents(
                     contents=contents,
                     model_name=model_name,
-                    result_parsing_func=get_llm_parser(model_name, return_json=True),
+                    result_parsing_func=parser,
                     generation_configs={
                         "temperature": 0.0,
                         "system_instruction": sxs_paper_quality_system_prompt,

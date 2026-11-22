@@ -12,12 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from utils.common_utils import load_md_file
-from utils.gemini_utils import call_gemini_with_contents
 import json
-from google.genai import types  # type: ignore
 
 from methods.prompts.outline_agent import outline_agent_system_prompt
+from utils.common_utils import load_md_file
+from utils.llm_backend_utils import call_llm_with_contents
 
 
 class OutlineAgent:
@@ -36,21 +35,15 @@ class OutlineAgent:
         output_filepath: str = None,
     ):
         contents = [
-            types.Part.from_text(
-                text=outline_agent_system_prompt.format(cutoff_date=self.cutoff_date)
-            ),
-            types.Part.from_text(text="'idea.md':\n" + load_md_file(idea_file)),
-            types.Part.from_text(
-                text="'experimental_log.md':\n" + load_md_file(experimental_log_file)
-            ),
-            types.Part.from_text(
-                text="'template.tex':\n" + load_md_file(latex_template_file)
-            ),
-            types.Part.from_text(text=load_md_file(conference_guidelines_file)),
+            "'idea.md':\n" + load_md_file(idea_file),
+            "'experimental_log.md':\n" + load_md_file(experimental_log_file),
+            "'template.tex':\n" + load_md_file(latex_template_file),
+            load_md_file(conference_guidelines_file),
         ]
-        response_dict = call_gemini_with_contents(
+        response_dict = call_llm_with_contents(
             contents=contents,
             model_name=self.model_name,
+            system_instruction=outline_agent_system_prompt.format(cutoff_date=self.cutoff_date),
         )
         json_result = response_dict["parsed_response"]
         if output_filepath is not None:
