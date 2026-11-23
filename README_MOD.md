@@ -112,27 +112,40 @@ Use `--use_plotting false` (the default) for CPA, `agy`, and T3 Code.
 Diagram generation still requires native Gemini, so enabling plotting
 under any of those three backends fails before paper generation starts.
 
-## Verification
+## Setup and verification
 
-Use Python 3.11 with the packages from `requirements.txt` and `pytest`.
-Keep the environment outside the checkout so `compileall` does not
-traverse installed packages. The optional Nix development shell provides
-Python, `uv`, and the TeX tools `pdflatex` and `bibtex`; install the Python
-packages into the separate environment. To run the local checks:
+On Linux x86-64, use Pixi to install the locked Python 3.11 environment
+with the packages from `requirements.txt` and `pytest`. From the
+repository root:
 
 ```sh
-/tmp/po-venv/bin/python -m compileall .
-/tmp/po-venv/bin/python -m pytest tests/ -q
+pixi install
+pixi run test
+pixi run check
 ```
 
-Unit tests replace service and CLI calls with mocks. The following live
-smoke checks are for Muse and are separate from the unit tests:
+`test` runs the unit tests with mocked service and CLI calls. `check`
+checks Python syntax with `compileall`, skipping the installed
+environment under `.pixi/`. Use `pixi run python` to run other Python
+commands in the same environment.
+
+If you cannot use Pixi, install `requirements.txt` and `pytest` in a
+Python 3.11 virtual environment and run `python -m pytest tests/ -q`
+and `python -m compileall .` from the repository root. To build LaTeX
+documents, install `pdflatex` and `bibtex` separately or use the optional
+Nix development shell.
+
+### Live smoke checks
+
+Muse runs these separately from the unit tests. If you activated a
+virtual environment instead of using Pixi, replace `pixi run python`
+with `python`.
 
 1. On the Muse VM, configure the CPA tunnel as described earlier. Run only
    the outline stage with the synthetic material in `examples/smoke/`:
 
    ```sh
-   python - <<'PY'
+   pixi run python - <<'PY'
    from methods.agents.outline_agent import OutlineAgent
 
    outline = OutlineAgent("preview/DeepSeek-V4.1-Flash-1017").run(
@@ -146,10 +159,10 @@ smoke checks are for Muse and are separate from the unit tests:
    ```
 
 2. On the Muse VM, sign in to `agy`, set `LLM_BACKEND=agy`, then run
-   `python -c 'from utils.llm_backend_utils import call_llm_with_text_prompt as call; print(call("Reply with OK.", "gemini-3.8-flash-medium", return_json=False)["raw_response"])'`.
+   `pixi run python -c 'from utils.llm_backend_utils import call_llm_with_text_prompt as call; print(call("Reply with OK.", "gemini-3.8-flash-medium", return_json=False)["raw_response"])'`.
    Check that the response contains `OK`.
 3. On the T3 server host, configure the mixed backend as described above.
    Set `SMOKE_IMAGE` to the path of a small, non-sensitive PNG and run
-   `python -c 'import os; from utils.llm_backend_utils import call_llm_with_images as call; print(call("Describe this image in one sentence.", [os.environ["SMOKE_IMAGE"]], "preview/DeepSeek-V4.1-Flash-1017", return_json=False)["raw_response"])'`.
+   `pixi run python -c 'import os; from utils.llm_backend_utils import call_llm_with_images as call; print(call("Describe this image in one sentence.", [os.environ["SMOKE_IMAGE"]], "preview/DeepSeek-V4.1-Flash-1017", return_json=False)["raw_response"])'`.
    Confirm that the returned text matches the new `out/answer.md` after
    trimming whitespace and that `materials/` contains a copy of the PNG.
