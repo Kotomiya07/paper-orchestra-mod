@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import re
 import subprocess
 import json
 import shutil
@@ -166,23 +167,60 @@ def get_paper_references_from_pdf(
     return None
 
 
-def compile_latex(cwd, pdf_file, texfile_name="template", timeout=30):
-    import os, shutil, subprocess, traceback, rich
+def _latex_build_commands(tex_text: str, texfile_name: str) -> list[list[str]]:
+    lualatex_in_header = False
+    for line in tex_text.splitlines():
+        line = line.lstrip()
+        if not line:
+            continue
+        if not line.startswith("%"):
+            break
+        if re.search(r"\blualatex\b", line, re.IGNORECASE):
+            lualatex_in_header = True
+            break
+
+    uncommented = re.sub(r"(?<!\\)%[^\n]*", "", tex_text)
+    documentclass = re.search(
+        r"\\documentclass\s*(?:\[[^\]]*\]\s*)?\{[^}]*\}", uncommented
+    )
+    lualatex_in_class = documentclass is not None and (
+        re.search(r"\b(?:lualatex|jlreq)\b", documentclass[0], re.IGNORECASE) is not None
+    )
+    use_lualatex = lualatex_in_header or lualatex_in_class
+    engine = "lualatex" if use_lualatex else "pdflatex"
+    latex = [engine, "-interaction=nonstopmode", f"{texfile_name}.tex"]
+
+    commands = [latex]
+    if not use_lualatex or r"\bibliography{" in uncommented:
+        bibtex = "upbibtex" if use_lualatex and shutil.which("upbibtex") else "bibtex"
+        commands.append([bibtex, texfile_name])
+    commands.extend([latex, latex])
+    return commands
+
+
+def compile_latex(
+    cwd: str | os.PathLike[str],
+    pdf_file: str | os.PathLike[str],
+    texfile_name: str = "template",
+    timeout: int = 30,
+) -> None:
+    """Build a PDF, using a 120-second per-command limit for LuaLaTeX documents."""
 
     source_pdf = os.path.join(cwd, f"{texfile_name}.pdf")
     if os.path.exists(source_pdf):
         os.remove(source_pdf)
 
+    with open(
+        os.path.join(cwd, f"{texfile_name}.tex"), encoding="utf-8-sig", errors="replace"
+    ) as tex_file:
+        commands = _latex_build_commands(tex_file.read(), texfile_name)
+    use_lualatex = commands[0][0] == "lualatex"
+    if use_lualatex:
+        timeout = 120
+
     env = dict(os.environ)
     for var in ["TEXINPUTS", "TEXMFHOME", "TEXMF", "TEXMFVAR", "TEXMFCONFIG"]:
         env.pop(var, None)
-
-    commands = [
-        ["pdflatex", "-interaction=nonstopmode", f"{texfile_name}.tex"],
-        ["bibtex", texfile_name],
-        ["pdflatex", "-interaction=nonstopmode", f"{texfile_name}.tex"],
-        ["pdflatex", "-interaction=nonstopmode", f"{texfile_name}.tex"],
-    ]
 
     execution_logs = []
 
@@ -224,30 +262,36 @@ def compile_latex(cwd, pdf_file, texfile_name="template", timeout=30):
         except Exception:
             rich.print(f"[bold red]Error moving generated PDF to {pdf_file}[/bold red]")
             print(traceback.format_exc())
+        if not use_lualatex:
+            return
+        # Keep a usable PDF even if one pass failed, but show the failed pass.
+        execution_logs = [
+            log for log in execution_logs if "error" in log or log["returncode"] != 0
+        ]
     else:
         rich.print(
             f"\n[bold red]❌ PDF Generation Failed (No PDF file produced)[/bold red]"
         )
 
-        for log in execution_logs:
-            if "error" in log:
-                header_color = "red"
-            elif log["returncode"] == 0:
-                header_color = "green"
-            else:
-                header_color = "yellow"  # Warning/Error
+    for log in execution_logs:
+        if "error" in log:
+            header_color = "red"
+        elif log["returncode"] == 0:
+            header_color = "green"
+        else:
+            header_color = "yellow"  # Warning/Error
 
-            rich.print(
-                f"\n[bold {header_color}]---> Ran: {log['cmd']}[/bold {header_color}]"
-            )
+        rich.print(
+            f"\n[bold {header_color}]---> Ran: {log['cmd']}[/bold {header_color}]"
+        )
 
-            if "error" in log:
-                rich.print(f"[bold red]SYSTEM ERROR: {log['error']}[/bold red]")
-            else:
-                if log["stdout"].strip():
-                    rich.print(f"[dim]{log['stdout'].strip()}[/dim]")
-                if log["stderr"].strip():
-                    rich.print(f"[red]{log['stderr'].strip()}[/red]")
+        if "error" in log:
+            rich.print(f"[bold red]SYSTEM ERROR: {log['error']}[/bold red]")
+        else:
+            if log["stdout"].strip():
+                rich.print(f"[dim]{log['stdout'].strip()}[/dim]")
+            if log["stderr"].strip():
+                rich.print(f"[red]{log['stderr'].strip()}[/red]")
 
 
 def pdf_to_grid_images(pdf_path, output_dir, scale=2.0):
